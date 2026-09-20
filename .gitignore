@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist.zip
+coverage/
+
+# Never commit real credentials; .env.example is the template that is tracked.
+.env
+.env.local
+.env.*.local
+*.pem
+*.crx
+
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
