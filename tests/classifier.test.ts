@@ -262,6 +262,7 @@ describe('deriveSummary', () => {
 describe('JevClassifier', () => {
   const options = {
     apiKey: 'test-key',
+    provider: 'typesafe' as const,
     baseUrl: 'https://api.typesafe.ai/v1/systemone',
     model: 'jev-latest',
     concurrency: 2,

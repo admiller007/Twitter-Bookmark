@@ -1,11 +1,19 @@
 import type { ContentType } from './types';
+import {
+  DEFAULT_JEV_PROVIDER,
+  getProvider,
+  inferProviderFromUrl,
+  type JevProviderId,
+} from '../classifier/providers';
 
 /**
  * Settings live in chrome.storage.local. The JEV API key is stored here too and
  * is never written into IndexedDB, exports, backups or diagnostics.
  */
 export interface Settings {
-  /** JEV (TypeSafe System One) API key. Empty means classification is disabled. */
+  /** Which route to JEV: through OpenRouter, or straight to TypeSafe. */
+  jevProvider: JevProviderId;
+  /** API key for the selected provider. Empty means classification is off. */
   jevApiKey: string;
   jevBaseUrl: string;
   jevModel: string;
@@ -56,13 +64,22 @@ export const DEFAULT_SEED_CATEGORIES = [
  * can be set this way. The API key deliberately cannot: a key baked into the
  * bundle would ship inside the extension and end up in version control.
  */
+const ENV_PROVIDER = import.meta.env?.VITE_JEV_PROVIDER;
 const ENV_BASE_URL = import.meta.env?.VITE_JEV_BASE_URL;
 const ENV_MODEL = import.meta.env?.VITE_JEV_MODEL;
 
+const DEFAULT_PROVIDER: JevProviderId =
+  ENV_PROVIDER === 'typesafe' || ENV_PROVIDER === 'openrouter'
+    ? ENV_PROVIDER
+    : DEFAULT_JEV_PROVIDER;
+
+const DEFAULT_PROFILE = getProvider(DEFAULT_PROVIDER);
+
 export const DEFAULT_SETTINGS: Settings = {
+  jevProvider: DEFAULT_PROVIDER,
   jevApiKey: '',
-  jevBaseUrl: ENV_BASE_URL || 'https://api.typesafe.ai/v1/systemone',
-  jevModel: ENV_MODEL || 'jev-latest',
+  jevBaseUrl: ENV_BASE_URL || DEFAULT_PROFILE.defaultBaseUrl,
+  jevModel: ENV_MODEL || DEFAULT_PROFILE.defaultModel,
   jevConcurrency: 4,
   jevMaxRetries: 3,
   incrementalKnownThreshold: 40,
@@ -81,7 +98,21 @@ const STORAGE_KEY = 'xbv_settings';
 export async function loadSettings(): Promise<Settings> {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
   const raw = (stored[STORAGE_KEY] ?? {}) as Partial<Settings>;
-  return { ...DEFAULT_SETTINGS, ...raw };
+  const settings: Settings = { ...DEFAULT_SETTINGS, ...raw };
+
+  // Settings saved before the provider choice existed only recorded an
+  // endpoint. Keep honouring it rather than silently switching routes.
+  if (!raw.jevProvider && raw.jevBaseUrl) {
+    settings.jevProvider = inferProviderFromUrl(raw.jevBaseUrl) ?? settings.jevProvider;
+  }
+
+  return settings;
+}
+
+/** Endpoint and model defaults for a route, used when the user switches. */
+export function providerDefaults(provider: JevProviderId): Pick<Settings, 'jevBaseUrl' | 'jevModel'> {
+  const profile = getProvider(provider);
+  return { jevBaseUrl: profile.defaultBaseUrl, jevModel: profile.defaultModel };
 }
 
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {

@@ -49,6 +49,7 @@ export async function createClassifier(
   if (!settings.jevApiKey) throw new ClassifierNotConfiguredError();
 
   return new JevClassifier({
+    provider: settings.jevProvider,
     apiKey: settings.jevApiKey,
     baseUrl: settings.jevBaseUrl,
     model: settings.jevModel,
@@ -89,7 +90,7 @@ export class ClassifyRunner {
   }
 
   /** Verifies the configured key and endpoint without classifying anything. */
-  async test(): Promise<{ model: string }> {
+  async test(): Promise<{ model: string; endpoint: string; provider: string }> {
     const classifier = await createClassifier();
     if (!(classifier instanceof JevClassifier)) {
       throw new Error('Configured classifier does not support connection tests.');

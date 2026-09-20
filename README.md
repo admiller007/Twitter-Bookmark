@@ -2,8 +2,8 @@
 
 A local-first Chrome extension (Manifest V3) that collects every post you have
 bookmarked on X/Twitter, stores it in IndexedDB in your own browser, optionally
-classifies it with **JEV** (TypeSafe's System One model), and exports the whole
-library to CSV or JSON.
+classifies it with **JEV** (TypeSafe's System One model, reached through
+OpenRouter or directly), and exports the whole library to CSV or JSON.
 
 ```
 X Bookmarks  →  local IndexedDB  →  optional JEV classification  →  searchable library  →  CSV / JSON
@@ -28,7 +28,7 @@ npm install
 
 ```bash
 npm run typecheck     # TypeScript, strict mode
-npm test              # 149 tests
+npm test              # 166 tests
 npm run verify        # typecheck + tests + production build
 ```
 
@@ -61,16 +61,49 @@ Pin the extension to your toolbar if you want the popup one click away.
 Classification is entirely optional. Collecting, searching, browsing, backing
 up and exporting all work with no API key at all.
 
+JEV is reachable by two routes, chosen in Settings. **OpenRouter is the
+default**, since it needs only an OpenRouter account:
+
+| | OpenRouter (default) | TypeSafe (direct) |
+| --- | --- | --- |
+| Endpoint | `https://openrouter.ai/api/v1/api/alpha/decisions` | `https://api.typesafe.ai/v1/systemone` |
+| Model | `typesafe/jev-1.13` (or `~typesafe/jev-latest`) | `jev-latest` |
+| Key | Your OpenRouter key (`sk-or-…`) | A TypeSafe key |
+| Billing | OpenRouter credits | TypeSafe account |
+| Who sees the payload | OpenRouter, then TypeSafe | TypeSafe only |
+
+Both speak the same Decisions API — `{ model, state, questions }` in, typed
+`answers` out — so the question template, validation and retry logic are
+identical either way.
+
+**To set it up:**
+
 1. Click the extension icon → **Settings** (or open the options page)
-2. Paste your JEV API key
-3. Chrome will ask you to grant network access to the endpoint
-   (`https://api.typesafe.ai/*` by default) — the extension requests **no** host
-   permissions at install time, so you grant only that one origin
-4. Click **Test connection**
+2. Under **How you reach JEV**, pick **OpenRouter**
+3. Paste your OpenRouter API key (get one at <https://openrouter.ai/keys>)
+4. Chrome will ask you to grant network access to `https://openrouter.ai/*` —
+   the extension requests **no** host permissions at install time, so you grant
+   only that one origin
+5. Click **Test connection**. It reports the model that answered and the exact
+   endpoint used.
+
+Switching routes in the dropdown also switches the endpoint and model slug to
+that route's defaults and clears the stored key, since the two use different
+credentials.
 
 The key is stored with `chrome.storage.local` in this browser profile only. It
 is never written into the bookmark database, exports, backups or diagnostics,
 and is never logged.
+
+> **A note on the OpenRouter endpoint.** The Decisions API is in alpha, and its
+> path is documented inconsistently: OpenRouter's own API reference gives
+> `https://openrouter.ai/api/v1/api/alpha/decisions` (with the doubled `/api/`),
+> while other sources give `https://openrouter.ai/api/alpha/decisions`. The
+> extension defaults to the official one and, if it answers 404, retries once
+> against the other and remembers whichever worked. **Test connection** shows
+> you the winner, which you can then paste into the endpoint field to pin it.
+> This fallback only applies to recognised provider URLs — an endpoint you type
+> yourself is used exactly as given.
 
 ## 6. Perform the first bookmark sync
 
@@ -189,7 +222,8 @@ API shape does not stop collection.
 
 JEV is a **decision model**: it evaluates one state against a map of typed
 questions and returns a calibrated answer for each. It never generates prose.
-It has three primitives:
+It is not a chat-completions model, which is why both routes use a dedicated
+Decisions endpoint rather than `/chat/completions`. It has three primitives:
 
 | Primitive | Answer |
 | --- | --- |
@@ -224,8 +258,10 @@ interface BookmarkClassifier {
 ```
 
 **Reliability.** Requests run with a configurable concurrency limit, retry on
-429/5xx/529 with exponential backoff and jitter, honour `Retry-After`, and
-checkpoint to IndexedDB after every chunk. Every response is validated before
+429/5xx/524/529 with exponential backoff and jitter, honour `Retry-After`, and
+checkpoint to IndexedDB after every chunk. Failures that retrying cannot fix
+are reported straight away with something actionable: a rejected key (401/403),
+exhausted OpenRouter credits (402), or an oversized payload (413). Every response is validated before
 it is persisted: an unknown category, an out-of-range score or a missing answer
 triggers **one repair pass** that re-asks only the unreadable questions. If that
 also fails, that single bookmark is marked `classification_status = "failed"`
@@ -248,7 +284,13 @@ classified:
 
 Never sent: your X cookies, tokens or credentials; full external URLs; image or
 video files; your personal notes, manual tags or favourites; anything at all
-when no API key is configured. Settings shows this same list in the UI.
+when no API key is configured. No attribution or identifying headers are sent
+either — just `Authorization` and `Content-Type`. Settings shows this same list
+in the UI.
+
+When the OpenRouter route is selected, that payload passes through OpenRouter
+on its way to TypeSafe, so OpenRouter sees it too. Settings states this above
+the list. Choose the direct TypeSafe route if you would rather it did not.
 
 ---
 
@@ -261,7 +303,7 @@ The extension asks for as little as it can. Every permission and why it exists:
 | `storage` | Stores your settings and the JEV API key with `chrome.storage.local`, scoped to this browser profile. |
 | `unlimitedStorage` | IndexedDB holds the full library — thousands of posts with text and metadata. Without this, Chrome can evict the database under storage pressure. |
 | Content script on `https://x.com/*`, `https://twitter.com/*` | Reads the bookmarks timeline you are already looking at, and draws the in-page control panel. This is the only site the extension touches. |
-| `optional_host_permissions: https://*/*` | **Not granted at install time.** Only used to request access to the one JEV endpoint you configure, at the moment you configure it. If you never enable JEV, nothing is ever granted. |
+| `optional_host_permissions: https://*/*` | **Not granted at install time.** Only used to request access to the one JEV endpoint you configure (`https://openrouter.ai/*` by default), at the moment you configure it. If you never enable JEV, nothing is ever granted. |
 
 Deliberately **not** requested:
 
@@ -294,7 +336,8 @@ src/
     network-parse.ts shape-based tweet parser (pure)
   classifier/
     classifier.ts    the BookmarkClassifier interface
-    jev.ts           JEV adapter: batching, retries, backoff
+    jev.ts           JEV adapter: batching, retries, backoff, error mapping
+    providers.ts     the OpenRouter and direct-TypeSafe routes
     prompt.ts        versioned question template
     validate.ts      strict response validation
     taxonomy.ts      category options, local tag candidates, extractive summary
@@ -306,7 +349,7 @@ src/
   shared/          types, message protocol, settings, logger, utilities
   ui/              React options page (Dashboard / Library / Sync /
                    Classification / Settings / Diagnostics) and the popup
-tests/             149 tests, with realistic X markup fixtures
+tests/             166 tests, with realistic X markup fixtures
 ```
 
 ### Database versioning
@@ -373,6 +416,11 @@ and no bookmark content.
   spreadsheet.
 - **Full Rescan deletion detection needs an uninterrupted run** to be complete;
   it is off by default and only ever flags, never deletes.
+- **OpenRouter's Decisions API is in alpha.** Its path is documented
+  inconsistently (see the note in step 5), and an alpha endpoint can move
+  again. The endpoint is editable in Settings and the adapter falls back once
+  on a 404, but neither route has been exercised against a live paid account
+  from this build.
 
 ## License
 

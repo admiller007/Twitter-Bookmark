@@ -4,8 +4,10 @@ import {
   DEFAULT_SETTINGS,
   JEV_DATA_NEVER_SENT,
   JEV_DATA_SENT_DESCRIPTION,
+  providerDefaults,
   type Settings,
 } from '../../shared/settings';
+import { JEV_PROVIDERS, getProvider, type JevProviderId } from '../../classifier/providers';
 import { sendToBackground } from '../../shared/messages';
 import { Banner, Card } from '../components/common';
 import { exportBackup, exportCsv, exportJson, importBackupFile } from '../lib/exports';
@@ -33,6 +35,8 @@ export function SettingsPage({
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => setApiKey(settings.jevApiKey), [settings.jevApiKey]);
+
+  const profile = getProvider(settings.jevProvider);
 
   const originPattern = (() => {
     try {
@@ -72,8 +76,13 @@ export function SettingsPage({
   const testConnection = async (): Promise<void> => {
     setTesting(true);
     try {
-      const result = await sendToBackground<{ model: string }>({ type: 'classify/test' });
-      notify({ kind: 'success', text: `JEV responded. Model: ${result.model}` });
+      const result = await sendToBackground<{ model: string; endpoint: string }>({
+        type: 'classify/test',
+      });
+      notify({
+        kind: 'success',
+        text: `JEV responded via ${profile.label}. Model: ${result.model} \u00b7 ${result.endpoint}`,
+      });
     } catch (error) {
       notify({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -90,12 +99,34 @@ export function SettingsPage({
 
       <Card title="JEV classification (optional)">
         <label className="field">
-          <span>JEV API key</span>
+          <span>How you reach JEV</span>
+          <select
+            className="select-inline"
+            value={settings.jevProvider}
+            onChange={(event) => {
+              const next = event.target.value as JevProviderId;
+              // Switching routes also switches the endpoint and model slug,
+              // which differ between them, and clears the old provider's key.
+              void update({ jevProvider: next, ...providerDefaults(next), jevApiKey: '' });
+              setApiKey('');
+            }}
+          >
+            {Object.values(JEV_PROVIDERS).map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <small>{profile.dataPathNote}</small>
+        </label>
+
+        <label className="field">
+          <span>{profile.keyLabel}</span>
           <div className="row">
             <input
               type={showKey ? 'text' : 'password'}
               value={apiKey}
-              placeholder="Paste your TypeSafe / JEV API key"
+              placeholder={`Paste your ${profile.label} API key`}
               autoComplete="off"
               spellCheck={false}
               onChange={(event) => setApiKey(event.target.value)}
@@ -108,8 +139,16 @@ export function SettingsPage({
             </button>
           </div>
           <small>
-            Stored with chrome.storage.local in this browser profile only. It is never written into
-            the bookmark database, exports, backups or diagnostics, and never logged.
+            {profile.keyHint} Stored with chrome.storage.local in this browser profile only. It is
+            never written into the bookmark database, exports, backups or diagnostics, and never
+            logged.{' '}
+            <a href={profile.keyUrl} target="_blank" rel="noreferrer noopener">
+              Get a key
+            </a>{' '}
+            {'\u00b7'}{' '}
+            <a href={profile.docsUrl} target="_blank" rel="noreferrer noopener">
+              API docs
+            </a>
           </small>
         </label>
 
@@ -121,16 +160,33 @@ export function SettingsPage({
               value={settings.jevBaseUrl}
               onChange={(event) => void update({ jevBaseUrl: event.target.value })}
             />
-            <small>Default: {DEFAULT_SETTINGS.jevBaseUrl}</small>
+            <small>
+              Default for {profile.label}: <span className="mono">{profile.defaultBaseUrl}</span>
+              {profile.alternateBaseUrls.length > 0 ? (
+                <>
+                  {' '}
+                  OpenRouter&apos;s Decisions API is in alpha and its path is documented
+                  inconsistently, so a 404 here is retried once against{' '}
+                  <span className="mono">{profile.alternateBaseUrls[0]}</span>. Test connection
+                  reports whichever answered.
+                </>
+              ) : null}
+            </small>
           </label>
           <label className="field">
             <span>Model</span>
             <input
               type="text"
+              list="jev-model-options"
               value={settings.jevModel}
               onChange={(event) => void update({ jevModel: event.target.value })}
             />
-            <small>Default: {DEFAULT_SETTINGS.jevModel}</small>
+            <datalist id="jev-model-options">
+              {profile.modelOptions.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+            <small>Default for {profile.label}: {profile.defaultModel}</small>
           </label>
         </div>
 
@@ -195,6 +251,9 @@ export function SettingsPage({
           Only when you run a classification, and only for the bookmarks being classified. If no API
           key is set, nothing leaves your browser at all.
         </p>
+        <Banner kind={settings.jevProvider === 'openrouter' ? 'info' : 'plain'}>
+          <b>Route:</b> {profile.dataPathNote}
+        </Banner>
         <div className="grid cols-2">
           <div>
             <h3 style={{ marginBottom: 6 }}>Sent</h3>
