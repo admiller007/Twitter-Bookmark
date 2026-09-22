@@ -54,7 +54,7 @@ function transactionDone(tx: IDBTransaction): Promise<void> {
 export function openDatabase(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
 
-  dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+  const pending = new Promise<IDBDatabase>((resolve, reject) => {
     const open = indexedDB.open(DB_NAME, DB_VERSION);
 
     open.onupgradeneeded = (event) => {
@@ -76,7 +76,7 @@ export function openDatabase(): Promise<IDBDatabase> {
       db.onversionchange = () => {
         // Another context wants to upgrade; release the handle so it can.
         db.close();
-        dbPromise = null;
+        if (dbPromise === pending) dbPromise = null;
       };
       resolve(db);
     };
@@ -96,7 +96,17 @@ export function openDatabase(): Promise<IDBDatabase> {
       );
   });
 
-  return dbPromise;
+  // Both ways an open can fail are recoverable - another tab holding the
+  // database while an upgrade is pending, or a transient storage error - and
+  // the messages above tell the user to try again. Caching the rejected
+  // promise would make that retry impossible, so the handle is dropped on
+  // failure and the next call opens afresh.
+  pending.catch(() => {
+    if (dbPromise === pending) dbPromise = null;
+  });
+
+  dbPromise = pending;
+  return pending;
 }
 
 /** Test hook: drops the cached connection. */
