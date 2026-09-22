@@ -226,7 +226,9 @@ export class SyncController {
 
         case 'collector/finished':
           this.isCollectorAlive = false;
-          await this.finish(message.reason);
+          // A content script from an older build has no reachedEnd field; an
+          // unknown answer is treated as "not the whole timeline".
+          await this.finish(message.reason, message.reachedEnd === true);
           return;
 
         case 'collector/error':
@@ -297,23 +299,45 @@ export class SyncController {
     this.broadcast();
   }
 
-  private async finish(reason: string): Promise<void> {
+  /**
+   * Ends the run.
+   *
+   * `reachedEnd` is the collector's report that it actually walked the
+   * timeline to the bottom. Without it the observed ids are only the newest
+   * slice of the history, and everything below the point where the run ended
+   * would look "missing" - which is why a rescan that was stopped, lost the
+   * tab, or gave up because X stopped loading must never sweep.
+   */
+  private async finish(reason: string, reachedEnd: boolean): Promise<void> {
     if (!this.session) return;
 
     const settings = await loadSettings();
     let extra = '';
 
     if (this.session.mode === 'full' && settings.detectUnbookmarkedOnFullRescan) {
-      // Only a full rescan inspects the whole history, so only a full rescan
-      // may conclude that an absent bookmark was removed - and even then it is
-      // flagged, never deleted.
-      const marked = await markMissingAsUnbookmarked(this.seenIds);
-      if (marked > 0) extra = ` ${marked} bookmark(s) marked as no longer bookmarked.`;
-      log.info('sync', `Full rescan flagged ${marked} missing bookmark(s)`);
+      if (reachedEnd) {
+        // Only a full rescan inspects the whole history, so only a full rescan
+        // may conclude that an absent bookmark was removed - and even then it
+        // is flagged, never deleted.
+        const marked = await markMissingAsUnbookmarked(this.seenIds);
+        if (marked > 0) extra = ` ${marked} bookmark(s) marked as no longer bookmarked.`;
+        log.info('sync', `Full rescan flagged ${marked} missing bookmark(s)`);
+      } else {
+        extra =
+          ' The rescan ended before the end of your bookmarks, so nothing was marked as no longer bookmarked.';
+        log.warn(
+          'sync',
+          'Skipped the unbookmarked sweep: the full rescan did not reach the end of the timeline',
+        );
+      }
     }
 
+    // A run the user stopped, or one that already failed, keeps that status.
+    // Only a run that ended on its own terms completed.
+    const halted = this.session.status === 'stopped' || this.session.status === 'error';
+
     await this.updateSession({
-      status: 'completed',
+      status: halted ? this.session.status : 'completed',
       finished_at: nowIso(),
       stop_reason: `${reason}${extra}`,
     });

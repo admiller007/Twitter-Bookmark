@@ -80,29 +80,36 @@ function createHarness(): Harness {
 interface RunResult {
   batches: BookmarkSource[][];
   finished: string | null;
+  reachedEnd: boolean | null;
   errors: Array<{ message: string; fatal: boolean }>;
   collector: BookmarkCollector;
 }
 
 async function run(
   harness: Harness,
-  onBatch?: (bookmarks: BookmarkSource[], all: BookmarkSource[][]) => BatchResult,
+  onBatch?: (
+    bookmarks: BookmarkSource[],
+    all: BookmarkSource[][],
+    collector: BookmarkCollector,
+  ) => BatchResult,
 ): Promise<RunResult> {
   const batches: BookmarkSource[][] = [];
   const errors: Array<{ message: string; fatal: boolean }> = [];
   let finished: string | null = null;
+  let reachedEnd: boolean | null = null;
 
-  const collector = new BookmarkCollector(
+  const collector: BookmarkCollector = new BookmarkCollector(
     CONFIG,
     {
-      onBatch: async (bookmarks) => {
+      onBatch: async (bookmarks): Promise<BatchResult> => {
         batches.push(bookmarks);
-        return onBatch ? onBatch(bookmarks, batches) : { stop: false };
+        return onBatch ? onBatch(bookmarks, batches, collector) : { stop: false };
       },
       onRound: () => undefined,
       onError: (message, fatal) => errors.push({ message, fatal }),
-      onFinished: (reason) => {
+      onFinished: (reason, end) => {
         finished = reason;
+        reachedEnd = end;
       },
     },
     harness.doc,
@@ -110,7 +117,7 @@ async function run(
   );
 
   await collector.run('incremental');
-  return { batches, finished, errors, collector };
+  return { batches, finished, reachedEnd, errors, collector };
 }
 
 describe('BookmarkCollector', () => {
@@ -158,6 +165,32 @@ describe('BookmarkCollector', () => {
 
     expect(result.batches).toHaveLength(1);
     expect(result.finished).toBe('Reached known history.');
+    // Only the newest slice was walked, so nothing may be concluded from the
+    // bookmarks that were never reached.
+    expect(result.reachedEnd).toBe(false);
+  });
+
+  it('does not claim it reached the end when it is stopped mid-run', async () => {
+    const harness = createHarness();
+    harness.render(ALL_FIXTURES.slice(0, 2));
+
+    const result = await run(harness, (_bookmarks, all, collector) => {
+      if (all.length === 1) collector.stop();
+      return { stop: false };
+    });
+
+    expect(result.finished).toBe('Sync stopped.');
+    expect(result.reachedEnd).toBe(false);
+  });
+
+  it('reports reaching the end once the feed stops producing anything new', async () => {
+    const harness = createHarness();
+    harness.render(ALL_FIXTURES.slice(0, 1));
+    harness.win.onScroll = () => harness.render([]);
+
+    const result = await run(harness);
+    expect(result.finished).toBe('Reached the end of your bookmarks.');
+    expect(result.reachedEnd).toBe(true);
   });
 
   it('finishes after the configured number of empty rounds', async () => {

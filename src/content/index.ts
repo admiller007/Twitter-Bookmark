@@ -222,8 +222,8 @@ async function startCollection(mode: SyncMode, config: CollectorConfig): Promise
       panel.update(fatal ? { error: message, status: 'error' } : { error: message });
     },
 
-    onFinished: (reason) => {
-      send({ type: 'collector/finished', reason });
+    onFinished: (reason, reachedEnd) => {
+      send({ type: 'collector/finished', reason, reachedEnd });
       stopKeepalive();
       port?.onMessage.removeListener(ackListener);
       panel.update({ status: 'done', phase: reason });

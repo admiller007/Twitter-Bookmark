@@ -29,7 +29,13 @@ export interface CollectorCallbacks {
   onBatch(bookmarks: BookmarkSource[], roundIndex: number): Promise<BatchResult>;
   onRound(info: { roundIndex: number; seen: number; emptyRounds: number; lastPostId: string | null }): void;
   onError(message: string, fatal: boolean): void;
-  onFinished(reason: string): void;
+  /**
+   * The run ended. `reachedEnd` is true only when the collector scrolled the
+   * timeline all the way to its end, so the set of ids it observed is the
+   * complete set. Being stopped, giving up after empty rounds, or being told
+   * to stop by the background worker all end the run without that guarantee.
+   */
+  onFinished(reason: string, reachedEnd: boolean): void;
 }
 
 export type CollectorState = 'idle' | 'running' | 'paused' | 'stopped' | 'finished';
@@ -129,7 +135,9 @@ export class BookmarkCollector {
     // position, so nothing visible is lost to virtualization.
     this.harvest();
     let flush = await this.flush();
-    if (flush.stop) return this.finish(flush.reason ?? 'stop-requested');
+    // The background worker asked to stop (the incremental heuristic), so only
+    // the newest slice of the timeline has been walked.
+    if (flush.stop) return this.finish(flush.reason ?? 'stop-requested', false);
 
     while (this.state === 'running' || this.state === 'paused') {
       await this.waitWhilePaused();
@@ -147,7 +155,7 @@ export class BookmarkCollector {
 
       this.harvest();
       flush = await this.flush();
-      if (flush.stop) return this.finish(flush.reason ?? 'stop-requested');
+      if (flush.stop) return this.finish(flush.reason ?? 'stop-requested', false);
 
       const discovered = this.seenIds.size - before;
       if (discovered > 0) {
@@ -165,21 +173,26 @@ export class BookmarkCollector {
 
       if (this.emptyRounds >= this.config.emptyRoundLimit) {
         const atBottomAfter = this.isAtBottom(this.getScroller());
+        // Sitting at the bottom with nothing new left to render is the only
+        // evidence that the whole timeline was seen. Running out of patience
+        // part-way up looks the same to the loop but is not the same thing.
+        const reachedEnd = atBottomBefore && atBottomAfter;
         return this.finish(
-          atBottomBefore && atBottomAfter
+          reachedEnd
             ? 'Reached the end of your bookmarks.'
             : 'No new bookmarks appeared after several attempts.',
+          reachedEnd,
         );
       }
     }
 
-    if (this.state === 'stopped') this.finish('Sync stopped.');
+    if (this.state === 'stopped') this.finish('Sync stopped.', false);
   }
 
-  private finish(reason: string): void {
+  private finish(reason: string, reachedEnd: boolean): void {
     if (this.state === 'finished') return;
     this.state = 'finished';
-    this.callbacks.onFinished(reason);
+    this.callbacks.onFinished(reason, reachedEnd);
   }
 
   private waitWhilePaused(): Promise<void> {
