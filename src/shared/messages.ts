@@ -74,7 +74,17 @@ export type CollectorToBackground =
       emptyRounds: number;
       lastPostId: string | null;
     }
-  | { type: 'collector/finished'; reason: string }
+  | {
+      type: 'collector/finished';
+      reason: string;
+      /**
+       * True only when the collector walked the timeline to its end. A run
+       * that was stopped, gave up, or ended on the incremental heuristic has
+       * seen part of the history, which is what decides whether the absence
+       * of a bookmark is evidence of anything.
+       */
+      reachedEnd: boolean;
+    }
   | { type: 'collector/error'; message: string; fatal: boolean }
   | { type: 'collector/keepalive' };
 

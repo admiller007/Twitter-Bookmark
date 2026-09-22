@@ -202,6 +202,12 @@ A Full Rescan can optionally flag records it did not see as
 `is_currently_bookmarked = false` (off by default, enable in Settings). They
 stay in your library, stay exported, and are only hidden if you ask for it.
 
+That flagging only ever runs after a rescan that actually reached the end of
+your bookmarks. A rescan you stopped, one whose tab was closed, or one that
+gave up because X stopped loading has seen only part of your history, so the
+bookmarks below the point where it ended were never reached — their absence
+proves nothing, and nothing is flagged. The run says so when it ends.
+
 ### The network enhancement (optional)
 
 A second content script runs in the page's own JavaScript context and reads the
@@ -414,8 +420,10 @@ and no bookmark content.
   whose text begins with `=` is exported verbatim, because altering your data
   would be worse. Treat exports as untrusted input if you open them in a
   spreadsheet.
-- **Full Rescan deletion detection needs an uninterrupted run** to be complete;
-  it is off by default and only ever flags, never deletes.
+- **Full Rescan deletion detection needs an uninterrupted run** to flag
+  anything at all: a rescan that did not reach the end of your bookmarks skips
+  the check entirely rather than flagging what it never reached. It is off by
+  default and only ever flags, never deletes.
 - **OpenRouter's Decisions API is in alpha.** Its path is documented
   inconsistently (see the note in step 5), and an alpha endpoint can move
   again. The endpoint is editable in Settings and the adapter falls back once
