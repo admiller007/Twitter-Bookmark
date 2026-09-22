@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   countBookmarks,
   getAllBookmarks,
@@ -229,6 +229,53 @@ describe('markMissingAsUnbookmarked', () => {
     expect(all).toHaveLength(2);
     expect(all.find((b) => b.post_id === '222222222222')?.is_currently_bookmarked).toBe(false);
     expect(all.find((b) => b.post_id === '111111111111')?.is_currently_bookmarked).toBe(true);
+  });
+});
+
+describe('openDatabase', () => {
+  /** An open request that fails through the handler the caller assigns. */
+  function failingOpen(handler: 'onerror' | 'onblocked', message: string): IDBOpenDBRequest {
+    const request = {
+      error: new Error(message),
+      result: undefined,
+      transaction: null,
+      onsuccess: null,
+      onerror: null,
+      onblocked: null,
+      onupgradeneeded: null,
+    } as unknown as IDBOpenDBRequest;
+
+    queueMicrotask(() => {
+      const fire = request[handler] as unknown as (() => void) | null;
+      fire?.();
+    });
+    return request;
+  }
+
+  it('does not cache a failed open, so the next call reopens', async () => {
+    vi.spyOn(indexedDB, 'open').mockImplementationOnce(() => failingOpen('onerror', 'disk on fire'));
+
+    await expect(countBookmarks()).rejects.toThrow(/disk on fire/);
+
+    // The spy is spent, so this call reaches the real IndexedDB again.
+    await expect(countBookmarks()).resolves.toBe(0);
+  });
+
+  it('recovers once the tab blocking an upgrade goes away', async () => {
+    vi.spyOn(indexedDB, 'open').mockImplementationOnce(() => failingOpen('onblocked', 'ignored'));
+
+    await expect(putBookmarks([makeBookmark({ post_id: '111111111111' })])).rejects.toThrow(
+      /blocked by another tab/,
+    );
+
+    await putBookmarks([makeBookmark({ post_id: '111111111111' })]);
+    expect(await countBookmarks()).toBe(1);
+  });
+
+  it('reuses one connection across calls that succeed', async () => {
+    const spy = vi.spyOn(indexedDB, 'open');
+    await Promise.all([countBookmarks(), getAllBookmarks(), countBookmarks()]);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
 
